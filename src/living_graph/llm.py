@@ -1,5 +1,5 @@
 # ABOUTME: LLM client for living graph workers — wraps Anthropic Claude API.
-# ABOUTME: Uses tool_use for structured entity extraction and enrichment.
+# ABOUTME: Uses tool_use for structured entity extraction, enrichment, and autofix.
 
 from __future__ import annotations
 
@@ -58,6 +58,40 @@ ENRICH_TOOL = {
 }
 
 
+AUTOFIX_TOOL = {
+    "name": "suggest_fix",
+    "description": "Suggest a fix for a validation issue on a Roam knowledge graph page.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["edit_block", "delete_block", "delete_page", "skip"],
+                "description": (
+                    "The fix to apply. edit_block: update a block's content. "
+                    "delete_block: remove a specific block. "
+                    "delete_page: remove the entire page. "
+                    "skip: no fix needed or issue is informational."
+                ),
+            },
+            "target_uid": {
+                "type": "string",
+                "description": "UID of the block to edit or delete. Required for edit_block and delete_block.",
+            },
+            "new_value": {
+                "type": "string",
+                "description": "New block content for edit_block action.",
+            },
+            "reasoning": {
+                "type": "string",
+                "description": "Brief explanation of why this fix is appropriate.",
+            },
+        },
+        "required": ["action", "reasoning"],
+    },
+}
+
+
 @dataclass
 class EntityManifest:
     """Structured output from the LLM entity extraction."""
@@ -78,6 +112,7 @@ class LLMClient:
         blocks: list[str],
         graph_context: str,
         ontology_summary: str,
+        user_profile: str = "",
     ) -> EntityManifest:
         """Extract entities from daily page blocks using tool_use.
 
@@ -85,19 +120,28 @@ class LLMClient:
             blocks: List of block text strings to analyze.
             graph_context: Compact snapshot of existing graph pages.
             ontology_summary: Summary of available types and required fields.
+            user_profile: Owner profile for relevance filtering.
 
         Returns:
             EntityManifest with extracted entities.
         """
         blocks_text = "\n".join(f"- {b}" for b in blocks)
 
+        profile_section = ""
+        if user_profile:
+            profile_section = (
+                "\n\nGRAPH OWNER PROFILE (use this to judge relevance):\n"
+                + user_profile + "\n"
+            )
+
         system = (
             "You are a curator for a personal knowledge graph. "
             "Your job is to identify entities (people, organizations, projects, tools, etc.) "
             "mentioned in daily page blocks and extract them as structured data.\n\n"
             "RULES:\n"
-            "- Only extract entities that are meaningful to the graph owner's life and work.\n"
-            "- Skip media references, historical figures mentioned in passing, generic concepts.\n"
+            "- Only extract entities the graph owner directly interacts with or works on.\n"
+            "- Skip: media references, historical figures, celebrities mentioned in passing, "
+            "generic concepts, subjects of analysis (vs subjects of work).\n"
             "- Check the existing graph context to avoid extracting entities that already exist.\n"
             "- For existing entities, only include them if the source adds NEW information.\n"
             "- Use the ontology to determine the correct type and required fields.\n"
@@ -107,6 +151,7 @@ class LLMClient:
             "where the source provides enough information.\n"
             "- For Related:: fields, use [[Namespace/Name]] format.\n"
             "- If no entities are worth extracting, return an empty entities array.\n"
+            + profile_section
         )
 
         user = (
@@ -179,3 +224,213 @@ class LLMClient:
                 return block.input.get("fields", {})
 
         return {}
+
+    def suggest_fix(
+        self,
+        issue,
+        page_title: str,
+        page_context: str,
+        ontology_summary: str,
+    ) -> dict:
+        """Suggest a fix for a validation issue.
+
+        Args:
+            issue: A validation Issue object with kind, severity, detail.
+            page_title: Title of the page with the issue.
+            page_context: Block listing with UIDs: "[uid] block text" per line.
+            ontology_summary: Summary of available types and required fields.
+
+        Returns:
+            Dict with keys: action, target_uid, new_value, reasoning.
+        """
+        system = (
+            "You are a janitor for a personal knowledge graph maintained in Roam Research. "
+            "Your job is to fix validation issues found by the scanner.\n\n"
+            "HARD CONSTRAINTS:\n"
+            "- You can ONLY edit or delete. You CANNOT create new pages.\n"
+            "- For edit_block: provide the target_uid and the complete new block text.\n"
+            "- For delete_block: provide the target_uid of the block to remove.\n"
+            "- For delete_page: no target_uid needed — the entire page will be removed.\n"
+            "- Use 'skip' when the issue is informational or cannot be fixed by editing.\n\n"
+            "FIX GUIDELINES:\n"
+            "- missing_attr: Skip — janitor cannot create blocks (would need create permission).\n"
+            "- invalid_status: Edit the Status:: block to the closest valid status value.\n"
+            "- stub: Delete the page if it has no useful content.\n"
+            "- broken_link: Edit the Related:: block to remove the bare text (deleted page reference).\n"
+            "- orphan: Skip — orphan status is informational and may resolve naturally.\n"
+        )
+
+        user = (
+            f"## Ontology\n{ontology_summary}\n\n"
+            f"## Page: {page_title}\n"
+            f"## Page Blocks (format: [uid] text)\n{page_context}\n\n"
+            f"## Issue\n"
+            f"Kind: {issue.kind}\n"
+            f"Severity: {issue.severity}\n"
+            f"Detail: {issue.detail}\n\n"
+            "Suggest a fix for this issue."
+        )
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            system=system,
+            tools=[AUTOFIX_TOOL],
+            tool_choice={"type": "tool", "name": "suggest_fix"},
+            messages=[{"role": "user", "content": user}],
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "suggest_fix":
+                return block.input
+
+        return {"action": "skip", "reasoning": "No fix suggested by LLM"}
+
+    def repair_link(
+        self,
+        page_title: str,
+        bare_text: str,
+        candidates: list[str],
+        block_uid: str,
+        current_value: str,
+    ) -> dict:
+        """Resolve an ambiguous broken link by choosing among candidates.
+
+        Args:
+            page_title: Page containing the broken link.
+            bare_text: The bare text (deleted page remnant) in Related::.
+            candidates: List of candidate page titles that might match.
+            block_uid: UID of the Related:: block.
+            current_value: Current full text of the Related:: block.
+
+        Returns:
+            Dict with keys: action, target_uid, new_value, reasoning.
+        """
+        candidates_text = "\n".join(
+            f"  - [[{c}]]" for c in candidates[:15]
+        )
+
+        system = (
+            "You are a janitor for a personal knowledge graph in Roam Research. "
+            "A page's Related:: attribute contains bare text where a wikilink used to be "
+            "(Roam strips [[brackets]] when the referenced page is deleted). "
+            "You have candidate pages that might be the correct replacement.\n\n"
+            "RULES:\n"
+            "- If one candidate clearly matches the bare text, fix the link.\n"
+            "- Replace the bare text with [[Candidate/Name]] in the Related:: value.\n"
+            "- If no candidate is a clear match, use action 'skip'.\n"
+            "- Preserve all existing valid [[links]] in the Related:: value.\n"
+            "- Do NOT create new pages — only fix the link text.\n"
+        )
+
+        user = (
+            f"## Page: {page_title}\n"
+            f"## Related:: block (UID: {block_uid})\n"
+            f"Current value: {current_value}\n"
+            f"Bare text to fix: '{bare_text}'\n\n"
+            f"## Candidate Pages\n{candidates_text}\n\n"
+            "Which candidate should replace the bare text?"
+        )
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            system=system,
+            tools=[AUTOFIX_TOOL],
+            tool_choice={"type": "tool", "name": "suggest_fix"},
+            messages=[{"role": "user", "content": user}],
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "suggest_fix":
+                return block.input
+
+        return {"action": "skip", "reasoning": "Could not resolve ambiguous link"}
+
+    def enrich_stub(
+        self,
+        page_title: str,
+        type_name: str,
+        required_attrs: list[str],
+        valid_statuses: list[str],
+        linked_context: str,
+        ontology_summary: str,
+    ) -> dict:
+        """Enrich a stub page using linked context. No fabrication.
+
+        Args:
+            page_title: Title of the stub page to enrich.
+            type_name: The entity type (Person, Project, etc.).
+            required_attrs: List of required attribute names.
+            valid_statuses: List of valid status values (empty if type has none).
+            linked_context: Formatted text of pages that link to this stub.
+            ontology_summary: Summary of the ontology for type reference.
+
+        Returns:
+            Dict with: action ("enrich"|"delete"|"skip"), fields, reasoning.
+        """
+        req_text = ", ".join(required_attrs) if required_attrs else "none"
+        status_text = ", ".join(valid_statuses) if valid_statuses else "none"
+
+        system = (
+            "You are a janitor enriching a stub record in a personal knowledge graph (Roam Research). "
+            "The page exists but has no content. Your job is to fill in attributes using ONLY "
+            "information from linked pages that reference this entity.\n\n"
+            "HARD RULES:\n"
+            "- Only use facts from the linked context below. Never invent information.\n"
+            "- For Person/Org types, you may include verifiable public facts (role, company).\n"
+            "- For all other types, use ONLY vault context.\n"
+            "- If there is insufficient context to add ANY meaningful attributes, return action 'skip'.\n"
+            "- If the page appears to be garbage (test data, nonsense), return action 'delete'.\n"
+            "- Use [[Namespace/Name]] format for Related:: values.\n"
+            "- For Status:: values, use only from the valid list.\n"
+        )
+
+        user = (
+            f"## Stub Page: {page_title}\n"
+            f"Type: {type_name}\n"
+            f"Required attributes: {req_text}\n"
+            f"Valid statuses: {status_text}\n\n"
+            f"## Ontology\n{ontology_summary}\n\n"
+            f"## Linked Context (pages that reference this entity)\n{linked_context}\n\n"
+            "Enrich this stub with attributes derived from the linked context."
+        )
+
+        enrich_stub_tool = {
+            "name": "enrich_stub_result",
+            "description": "Return the enrichment result for a stub page.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["enrich", "delete", "skip"],
+                        "description": "enrich: add fields. delete: remove garbage. skip: insufficient context.",
+                    },
+                    "fields": {
+                        "type": "object",
+                        "description": "Attribute names and values to add. Only for action 'enrich'.",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of the decision.",
+                    },
+                },
+                "required": ["action", "reasoning"],
+            },
+        }
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=1024,
+            system=system,
+            tools=[enrich_stub_tool],
+            tool_choice={"type": "tool", "name": "enrich_stub_result"},
+            messages=[{"role": "user", "content": user}],
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "enrich_stub_result":
+                return block.input
+
+        return {"action": "skip", "reasoning": "No enrichment suggested by LLM"}

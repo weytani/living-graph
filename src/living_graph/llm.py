@@ -112,6 +112,7 @@ class LLMClient:
         blocks: list[str],
         graph_context: str,
         ontology_summary: str,
+        user_profile: str = "",
     ) -> EntityManifest:
         """Extract entities from daily page blocks using tool_use.
 
@@ -119,19 +120,28 @@ class LLMClient:
             blocks: List of block text strings to analyze.
             graph_context: Compact snapshot of existing graph pages.
             ontology_summary: Summary of available types and required fields.
+            user_profile: Owner profile for relevance filtering.
 
         Returns:
             EntityManifest with extracted entities.
         """
         blocks_text = "\n".join(f"- {b}" for b in blocks)
 
+        profile_section = ""
+        if user_profile:
+            profile_section = (
+                "\n\nGRAPH OWNER PROFILE (use this to judge relevance):\n"
+                + user_profile + "\n"
+            )
+
         system = (
             "You are a curator for a personal knowledge graph. "
             "Your job is to identify entities (people, organizations, projects, tools, etc.) "
             "mentioned in daily page blocks and extract them as structured data.\n\n"
             "RULES:\n"
-            "- Only extract entities that are meaningful to the graph owner's life and work.\n"
-            "- Skip media references, historical figures mentioned in passing, generic concepts.\n"
+            "- Only extract entities the graph owner directly interacts with or works on.\n"
+            "- Skip: media references, historical figures, celebrities mentioned in passing, "
+            "generic concepts, subjects of analysis (vs subjects of work).\n"
             "- Check the existing graph context to avoid extracting entities that already exist.\n"
             "- For existing entities, only include them if the source adds NEW information.\n"
             "- Use the ontology to determine the correct type and required fields.\n"
@@ -141,6 +151,7 @@ class LLMClient:
             "where the source provides enough information.\n"
             "- For Related:: fields, use [[Namespace/Name]] format.\n"
             "- If no entities are worth extracting, return an empty entities array.\n"
+            + profile_section
         )
 
         user = (

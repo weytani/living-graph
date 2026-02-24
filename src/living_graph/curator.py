@@ -19,6 +19,8 @@ from living_graph.scope import ScopeEnforcer
 class CuratorPipeline:
     """4-stage curator pipeline: Analyze → Resolve → Interlink → Enrich."""
 
+    PROFILE_PAGE = "Convention/David's Preferences"
+
     def __init__(
         self,
         roam: RoamClient,
@@ -68,6 +70,45 @@ class CuratorPipeline:
             if "#curated" not in current:
                 self._roam.update_block(uid, f"{current} #curated")
 
+    def load_user_profile(self) -> str:
+        """Load the graph owner's profile from Convention page.
+
+        Returns profile text for LLM relevance filtering, or empty string
+        if the page doesn't exist.
+        """
+        results = self._roam.q(
+            '[:find ?uid :where '
+            f'[?p :node/title "{self.PROFILE_PAGE}"] '
+            '[?p :block/uid ?uid]]'
+        )
+        if not results:
+            return ""
+
+        page_uid = results[0][0]
+        tree = self._roam.pull(
+            "[:block/uid {:block/children [:block/string :block/order {:block/children ...}]}]",
+            f'[:block/uid "{page_uid}"]',
+        )
+        children = sorted(
+            tree.get(":block/children", []),
+            key=lambda b: b.get(":block/order", 0),
+        )
+
+        lines = []
+        for child in children:
+            text = child.get(":block/string", "")
+            if text:
+                lines.append(f"- {text}")
+            for grandchild in sorted(
+                child.get(":block/children", []),
+                key=lambda b: b.get(":block/order", 0),
+            ):
+                gc_text = grandchild.get(":block/string", "")
+                if gc_text:
+                    lines.append(f"  - {gc_text}")
+
+        return "\n".join(lines)
+
     def build_ontology_summary(self) -> str:
         """Build a compact ontology summary for LLM context."""
         types = self._parser.parse()
@@ -109,11 +150,13 @@ class CuratorPipeline:
         # --- Stage 1: Analyze (LLM) ---
         graph_context = self._context.build()
         ontology_summary = self.build_ontology_summary()
+        user_profile = self.load_user_profile()
 
         manifest = self._llm.extract_entities(
             blocks=block_texts,
             graph_context=graph_context,
             ontology_summary=ontology_summary,
+            user_profile=user_profile,
         )
 
         self._logger.log(

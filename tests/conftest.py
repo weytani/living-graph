@@ -1,8 +1,9 @@
 # ABOUTME: Shared pytest fixtures for Roam API integration tests.
-# ABOUTME: Provides authenticated client and Test/ namespace cleanup.
+# ABOUTME: Provides authenticated client, Anthropic client, and Test/ namespace cleanup.
 
 import os
 import pytest
+import anthropic
 from dotenv import load_dotenv
 from living_graph.client import RoamClient
 
@@ -15,6 +16,15 @@ def roam():
     graph = os.environ["ROAM_GRAPH"]
     token = os.environ["ROAM_API_TOKEN"]
     return RoamClient(graph, token)
+
+
+@pytest.fixture(scope="session")
+def claude():
+    """Authenticated Anthropic client for the session."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        pytest.skip("ANTHROPIC_API_KEY not set")
+    return anthropic.Anthropic(api_key=api_key)
 
 
 @pytest.fixture(scope="session")

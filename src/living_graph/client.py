@@ -10,7 +10,7 @@ class RoamClient:
 
     BASE_URL = "https://api.roamresearch.com"
 
-    def __init__(self, graph: str, token: str, max_retries: int = 3):
+    def __init__(self, graph: str, token: str, max_retries: int = 5):
         self.graph = graph
         self._session = requests.Session()
         self._session.headers.update(
@@ -36,7 +36,7 @@ class RoamClient:
                     return {}
                 return resp.json()
             if resp.status_code == 429:
-                wait = min(2 ** attempt * 5, 65)
+                wait = min(2 ** attempt * 10, 65)
                 time.sleep(wait)
                 continue
             resp.raise_for_status()

@@ -77,4 +77,69 @@ def test_issue_severity(roam, test_namespace):
     scanner = ValidationScanner(roam)
     issues = scanner.validate_page("Test/Severity Check", type_name="Person")
     for issue in issues:
-        assert issue.severity in ("error", "warning", "info")
+        assert issue.severity in ("critical", "warning", "info")
+
+
+def test_broken_link_detection(roam, test_namespace):
+    """Should detect Related:: links pointing to deleted pages."""
+    # Create both pages, link them, then delete the target
+    roam.create_page("Test/Broken Link Page")
+    roam.create_page("Test/Link Will Be Deleted")
+    time.sleep(2)
+    pages = roam.q(
+        '[:find ?uid :where [?p :node/title "Test/Broken Link Page"] [?p :block/uid ?uid]]'
+    )
+    page_uid = pages[0][0]
+    roam.create_block(page_uid, "Role:: Engineer", 0)
+    roam.create_block(page_uid, "Related:: [[Test/Link Will Be Deleted]]", 1)
+    time.sleep(2)
+
+    # Now delete the target page, creating a broken link
+    target = roam.q(
+        '[:find ?uid :where [?p :node/title "Test/Link Will Be Deleted"] [?p :block/uid ?uid]]'
+    )
+    roam.delete_page(target[0][0])
+    time.sleep(3)
+
+    scanner = ValidationScanner(roam)
+    issues = scanner.validate_page("Test/Broken Link Page", type_name="Person")
+    broken = [i for i in issues if i.kind == "broken_link"]
+    assert len(broken) == 1
+    assert "bare text" in broken[0].detail
+
+
+def test_broken_link_ignores_valid_links(roam, test_namespace):
+    """Should not flag Related:: links that point to real pages."""
+    roam.create_page("Test/Link Target")
+    roam.create_page("Test/Link Source")
+    time.sleep(2)
+    pages = roam.q(
+        '[:find ?uid :where [?p :node/title "Test/Link Source"] [?p :block/uid ?uid]]'
+    )
+    page_uid = pages[0][0]
+    roam.create_block(page_uid, "Role:: Tester", 0)
+    roam.create_block(page_uid, "Related:: [[Test/Link Target]]", 1)
+    time.sleep(2)
+
+    scanner = ValidationScanner(roam)
+    issues = scanner.validate_page("Test/Link Source", type_name="Person")
+    broken = [i for i in issues if i.kind == "broken_link"]
+    assert len(broken) == 0
+
+
+def test_orphan_detection(roam, test_namespace):
+    """Should detect pages with no incoming references from other pages."""
+    roam.create_page("Test/Orphan Page")
+    time.sleep(2)
+    pages = roam.q(
+        '[:find ?uid :where [?p :node/title "Test/Orphan Page"] [?p :block/uid ?uid]]'
+    )
+    page_uid = pages[0][0]
+    roam.create_block(page_uid, "Role:: Nobody", 0)
+    roam.create_block(page_uid, "Related:: [[Test/Something]]", 1)
+    time.sleep(2)
+
+    scanner = ValidationScanner(roam)
+    issues = scanner.validate_page("Test/Orphan Page", type_name="Person")
+    orphan_issues = [i for i in issues if i.kind == "orphan"]
+    assert len(orphan_issues) == 1

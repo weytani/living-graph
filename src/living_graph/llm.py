@@ -58,6 +58,53 @@ ENRICH_TOOL = {
 }
 
 
+DISTILL_TOOL = {
+    "name": "distill_insights",
+    "description": "Extract implicit epistemic knowledge from daily page blocks.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "assumption", "constraint", "contradiction",
+                                "synthesis", "decision",
+                            ],
+                            "description": "The epistemic type.",
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Short descriptive name in Title Case (e.g. 'Roam API Stability').",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "1-3 sentence explanation of the insight and its context.",
+                        },
+                        "fields": {
+                            "type": "object",
+                            "description": (
+                                "Attribute values per the ontology. Keys depend on type: "
+                                "Assumption→{Confidence,Status,Source}, "
+                                "Constraint→{Scope,Status,Source}, "
+                                "Contradiction→{Sources,Status,Tension}, "
+                                "Synthesis→{Sources,Related}, "
+                                "Decision→{Rationale,Status,Alternatives,Related}."
+                            ),
+                        },
+                    },
+                    "required": ["type", "name", "description", "fields"],
+                },
+            },
+        },
+        "required": ["entities"],
+    },
+}
+
 AUTOFIX_TOOL = {
     "name": "suggest_fix",
     "description": "Suggest a fix for a validation issue on a Roam knowledge graph page.",
@@ -224,6 +271,85 @@ class LLMClient:
                 return block.input.get("fields", {})
 
         return {}
+
+    def distill_insights(
+        self,
+        blocks: list[str],
+        graph_context: str,
+        ontology_summary: str,
+        user_profile: str = "",
+    ) -> EntityManifest:
+        """Extract implicit epistemic knowledge from daily page blocks.
+
+        Surfaces assumptions, decisions, constraints, contradictions, and
+        syntheses that are implied but not explicitly stated.
+
+        Args:
+            blocks: List of block text strings to analyze.
+            graph_context: Compact snapshot of existing epistemic pages.
+            ontology_summary: Summary of epistemic types and their attributes.
+            user_profile: Owner profile for relevance filtering.
+
+        Returns:
+            EntityManifest with epistemic entities.
+        """
+        blocks_text = "\n".join(f"- {b}" for b in blocks)
+
+        profile_section = ""
+        if user_profile:
+            profile_section = (
+                "\n\nGRAPH OWNER PROFILE (use for relevance filtering):\n"
+                + user_profile + "\n"
+            )
+
+        system = (
+            "You are a distiller for a personal knowledge graph. "
+            "Your job is to surface IMPLICIT epistemic knowledge from daily page blocks — "
+            "things the author believes, decided, or is constrained by, but didn't explicitly state.\n\n"
+            "TYPES YOU CAN EXTRACT:\n"
+            "- **assumption**: An unstated belief the author is operating on. "
+            "Something they take for granted that could be wrong.\n"
+            "- **decision**: A choice that was made (explicitly or implicitly) with alternatives not chosen. "
+            "Not a task — a fork in the road where one path was taken.\n"
+            "- **constraint**: A known boundary or limitation being worked within or around.\n"
+            "- **contradiction**: A tension between two stated positions or between stated intent and action.\n"
+            "- **synthesis**: An integrated learning that resolves or transcends earlier assumptions/contradictions.\n\n"
+            "RULES:\n"
+            "- Only extract insights genuinely present in the source. Do not fabricate.\n"
+            "- Check existing epistemic pages to avoid duplicates.\n"
+            "- Name insights descriptively in Title Case (e.g. 'Roam API Rate Limit Impact').\n"
+            "- The 'description' should explain the insight in 1-3 sentences.\n"
+            "- Set 'fields' per the ontology requirements for each type.\n"
+            "- For Source:: fields, reference the daily page title in [[brackets]].\n"
+            "- For Confidence:: use high/medium/low.\n"
+            "- For Status:: use the first valid status (active, unresolved, etc.).\n"
+            "- Prefer fewer, higher-quality insights over many weak ones.\n"
+            "- If no epistemic insights are worth extracting, return an empty array.\n"
+            + profile_section
+        )
+
+        user = (
+            f"## Epistemic Ontology\n{ontology_summary}\n\n"
+            f"## Existing Epistemic Graph\n{graph_context}\n\n"
+            f"## Daily Page Blocks to Analyze\n{blocks_text}\n\n"
+            "Surface any implicit assumptions, decisions, constraints, contradictions, "
+            "or syntheses from these blocks."
+        )
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=4096,
+            system=system,
+            tools=[DISTILL_TOOL],
+            tool_choice={"type": "tool", "name": "distill_insights"},
+            messages=[{"role": "user", "content": user}],
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "distill_insights":
+                return EntityManifest(entities=block.input.get("entities", []))
+
+        return EntityManifest()
 
     def suggest_fix(
         self,

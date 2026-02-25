@@ -46,7 +46,8 @@ class MutationLogger:
         Returns:
             Dict with 'uid' and 'title' keys.
         """
-        title = f"{self._prefix}{worker} {date}"
+        timestamp = datetime.now().strftime("%H%M%S")
+        title = f"{self._prefix}{worker} {date} {timestamp}"
         roam_date = _roam_date(date)
 
         # Create the page

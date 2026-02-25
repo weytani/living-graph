@@ -96,6 +96,47 @@ def cmd_janitor(args):
     print("Done.")
 
 
+def cmd_distill(args):
+    """Run the distiller pipeline."""
+    load_dotenv()
+    import anthropic
+    from living_graph.client import RoamClient
+    from living_graph.distiller import DistillerPipeline
+
+    roam = RoamClient(
+        graph=os.environ["ROAM_GRAPH"],
+        token=os.environ["ROAM_API_TOKEN"],
+    )
+    claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    pipeline = DistillerPipeline(roam, claude)
+
+    if args.page:
+        pages = [args.page]
+    else:
+        target = date.today()
+        if args.date:
+            target = date.fromisoformat(args.date)
+        pages = [_ordinal_date(target)]
+
+        if args.catch_up:
+            for i in range(1, args.catch_up + 1):
+                d = target - timedelta(days=i)
+                pages.append(_ordinal_date(d))
+
+    for page_title in pages:
+        print(f"Distilling: {page_title}")
+        result = pipeline.distill_page(page_title)
+        print(
+            f"  Blocks: {result['blocks_processed']}, "
+            f"Insights: {result['insights_extracted']}, "
+            f"Created: {result['pages_created']}, "
+            f"Existing: {result['pages_resolved']}"
+        )
+
+    print("Done.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="living_graph",
@@ -131,6 +172,21 @@ def main():
         help="Light sweep (Stage 1 only, no LLM calls)",
     )
     janitor_parser.set_defaults(func=cmd_janitor)
+
+    distill_parser = subparsers.add_parser("distill", help="Run the distiller pipeline")
+    distill_parser.add_argument(
+        "--page", type=str, help="Specific page title to distill"
+    )
+    distill_parser.add_argument(
+        "--date", type=str, help="Date to distill (YYYY-MM-DD format, default: today)"
+    )
+    distill_parser.add_argument(
+        "--catch-up",
+        type=int,
+        default=0,
+        help="Also process the previous N days",
+    )
+    distill_parser.set_defaults(func=cmd_distill)
 
     args = parser.parse_args()
     if not args.command:

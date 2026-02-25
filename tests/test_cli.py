@@ -41,8 +41,20 @@ def test_cli_janitor_help():
     assert "--namespace" in result.stdout
 
 
-def test_cli_shows_both_subcommands():
-    """Main help should list both curate and janitor."""
+def test_cli_distill_help():
+    """Distill subcommand should show help."""
+    result = subprocess.run(
+        [sys.executable, "-m", "living_graph", "distill", "--help"],
+        capture_output=True,
+        text=True,
+        cwd="/Users/djr/code/living-graph",
+    )
+    assert result.returncode == 0
+    assert "--page" in result.stdout or "--date" in result.stdout
+
+
+def test_cli_shows_all_subcommands():
+    """Main help should list all worker subcommands."""
     result = subprocess.run(
         [sys.executable, "-m", "living_graph", "--help"],
         capture_output=True,
@@ -52,3 +64,4 @@ def test_cli_shows_both_subcommands():
     assert result.returncode == 0
     assert "curate" in result.stdout
     assert "janitor" in result.stdout
+    assert "distill" in result.stdout

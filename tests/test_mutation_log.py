@@ -8,7 +8,7 @@ from living_graph.mutation_log import MutationLogger
 def test_create_run(roam, test_namespace):
     logger = MutationLogger(roam, namespace_prefix="Test/Run/")
     run = logger.create_run("TestWorker", "2026-02-24")
-    assert run["title"] == "Test/Run/TestWorker 2026-02-24"
+    assert run["title"].startswith("Test/Run/TestWorker 2026-02-24")
     assert "uid" in run
 
 

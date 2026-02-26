@@ -1,5 +1,5 @@
 # ABOUTME: CLI entry point for the living graph system.
-# ABOUTME: Run workers from command line: python -m living_graph {curate,janitor}
+# ABOUTME: Run workers from command line: python -m living_graph {curate,janitor,distill,survey}
 
 import argparse
 import os
@@ -137,6 +137,46 @@ def cmd_distill(args):
     print("Done.")
 
 
+def cmd_survey(args):
+    """Run the surveyor pipeline."""
+    load_dotenv()
+    import anthropic
+    from living_graph.client import RoamClient
+    from living_graph.surveyor import SurveyorPipeline
+
+    roam = RoamClient(
+        graph=os.environ["ROAM_GRAPH"],
+        token=os.environ["ROAM_API_TOKEN"],
+    )
+    claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    data_dir = args.data_dir or "data"
+    pipeline = SurveyorPipeline(roam, claude, data_dir=data_dir)
+
+    pages = None
+    if args.namespace:
+        # Survey only pages in a specific namespace
+        results = roam.q(
+            '[:find ?title :where '
+            '[?p :node/title ?title] '
+            '[(clojure.string/starts-with? ?title "' + args.namespace + '")]]'
+        )
+        pages = sorted(row[0] for row in results)
+        print(f"Surveying {len(pages)} pages in {args.namespace}...")
+    else:
+        print("Surveying all typed pages...")
+
+    result = pipeline.survey(page_titles=pages)
+
+    print(
+        f"  Embedded: {result['pages_embedded']}\n"
+        f"  Clusters: {result['clusters_found']}\n"
+        f"  Tags written: {result['tags_written']}\n"
+        f"  Relationships written: {result['relationships_written']}"
+    )
+    print("Done.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="living_graph",
@@ -187,6 +227,20 @@ def main():
         help="Also process the previous N days",
     )
     distill_parser.set_defaults(func=cmd_distill)
+
+    survey_parser = subparsers.add_parser("survey", help="Run the surveyor pipeline")
+    survey_parser.add_argument(
+        "--namespace",
+        type=str,
+        help="Limit survey to a specific namespace prefix (e.g. Person/)",
+    )
+    survey_parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory for vector DB and state files (default: data/)",
+    )
+    survey_parser.set_defaults(func=cmd_survey)
 
     args = parser.parse_args()
     if not args.command:

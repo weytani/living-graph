@@ -105,6 +105,46 @@ DISTILL_TOOL = {
     },
 }
 
+LABEL_CLUSTER_TOOL = {
+    "name": "label_cluster",
+    "description": "Label a cluster of related pages with hierarchical tags and suggest relationships.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "1-3 hierarchical tags for this cluster. "
+                    "Use slash-separated hierarchy (e.g. 'knowledge-management/personal-tools')."
+                ),
+            },
+            "relationships": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string", "description": "Page title of the source."},
+                        "target": {"type": "string", "description": "Page title of the target."},
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "related-to", "supports", "depends-on",
+                                "part-of", "supersedes", "contradicts",
+                            ],
+                            "description": "The relationship type.",
+                        },
+                        "reasoning": {"type": "string", "description": "Why this relationship exists."},
+                    },
+                    "required": ["source", "target", "type", "reasoning"],
+                },
+                "description": "Suggested relationships between pages in the cluster.",
+            },
+        },
+        "required": ["tags", "relationships"],
+    },
+}
+
 AUTOFIX_TOOL = {
     "name": "suggest_fix",
     "description": "Suggest a fix for a validation issue on a Roam knowledge graph page.",
@@ -271,6 +311,55 @@ class LLMClient:
                 return block.input.get("fields", {})
 
         return {}
+
+    def label_cluster(self, cluster_pages: list[dict]) -> dict:
+        """Label a cluster of pages with tags and suggest relationships.
+
+        Args:
+            cluster_pages: List of {"title": str, "text": str} dicts.
+
+        Returns:
+            Dict with "tags" (list of str) and "relationships" (list of dicts).
+        """
+        pages_text = "\n\n".join(
+            f"### {p['title']}\n{p['text']}" for p in cluster_pages
+        )
+
+        system = (
+            "You are analyzing a cluster of semantically related pages in a personal knowledge graph. "
+            "Your job is to:\n"
+            "1. Assign 1-3 hierarchical tags that describe what this cluster is about.\n"
+            "2. Suggest specific relationships between pages in the cluster.\n\n"
+            "RELATIONSHIP TYPES:\n"
+            "- related-to: General thematic connection\n"
+            "- supports: Source provides evidence/foundation for target\n"
+            "- depends-on: Source requires target to function\n"
+            "- part-of: Source is a component of target\n"
+            "- supersedes: Source replaces or updates target\n"
+            "- contradicts: Source conflicts with target\n\n"
+            "RULES:\n"
+            "- Tags should be lowercase, slash-separated hierarchy (e.g. 'ai/llm-tools')\n"
+            "- Only suggest relationships with clear evidence from the page content\n"
+            "- Prefer specific relationship types over generic 'related-to'\n"
+            "- Use exact page titles as they appear\n"
+        )
+
+        user = f"## Cluster Pages\n{pages_text}\n\nLabel this cluster and suggest relationships."
+
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=2048,
+            system=system,
+            tools=[LABEL_CLUSTER_TOOL],
+            tool_choice={"type": "tool", "name": "label_cluster"},
+            messages=[{"role": "user", "content": user}],
+        )
+
+        for block in response.content:
+            if block.type == "tool_use" and block.name == "label_cluster":
+                return block.input
+
+        return {"tags": [], "relationships": []}
 
     def distill_insights(
         self,

@@ -102,6 +102,23 @@ def test_distill_insights_empty_when_no_insights(claude):
         assert entity["type"] in {"assumption", "constraint", "contradiction", "synthesis", "decision"}
 
 
+def test_label_cluster(claude):
+    """Should generate tags and relationship suggestions for a cluster."""
+    llm = LLMClient(claude)
+    cluster_pages = [
+        {"title": "Project/Living Graph", "text": "Agentic maintenance system for Roam"},
+        {"title": "Tool/Roam Research", "text": "Networked thought tool with graph queries"},
+        {"title": "Tool/Claude", "text": "Anthropic's AI assistant used for coding"},
+    ]
+    result = llm.label_cluster(cluster_pages)
+
+    assert "tags" in result
+    assert "relationships" in result
+    assert isinstance(result["tags"], list)
+    assert len(result["tags"]) >= 1
+    assert isinstance(result["relationships"], list)
+
+
 def test_enrich_entity_returns_fields(claude):
     llm = LLMClient(claude)
     result = llm.enrich_entity(

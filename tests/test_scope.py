@@ -49,6 +49,33 @@ def test_surveyor_can_only_edit_tags():
         scope.check("delete", "Person/")
 
 
+def test_surveyor_can_edit_relationships():
+    """Surveyor should be allowed to add/edit relationship attributes."""
+    enforcer = ScopeEnforcer("surveyor")
+    enforcer.check("edit_relationships")  # Should not raise
+
+
+def test_surveyor_cannot_create():
+    """Surveyor cannot create pages."""
+    enforcer = ScopeEnforcer("surveyor")
+    with pytest.raises(ScopeError):
+        enforcer.check("create")
+
+
+def test_surveyor_cannot_edit():
+    """Surveyor cannot edit page content (only tags and relationships)."""
+    enforcer = ScopeEnforcer("surveyor")
+    with pytest.raises(ScopeError):
+        enforcer.check("edit")
+
+
+def test_surveyor_cannot_delete():
+    """Surveyor cannot delete anything."""
+    enforcer = ScopeEnforcer("surveyor")
+    with pytest.raises(ScopeError):
+        enforcer.check("delete")
+
+
 def test_unknown_worker_raises():
     with pytest.raises(ScopeError, match="Unknown worker"):
         ScopeEnforcer("unknown")

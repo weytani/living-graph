@@ -53,6 +53,19 @@ def test_cli_distill_help():
     assert "--page" in result.stdout or "--date" in result.stdout
 
 
+def test_cli_survey_help():
+    """Survey subcommand should show help."""
+    result = subprocess.run(
+        [sys.executable, "-m", "living_graph", "survey", "--help"],
+        capture_output=True,
+        text=True,
+        cwd="/Users/djr/code/living-graph",
+    )
+    assert result.returncode == 0
+    assert "--namespace" in result.stdout
+    assert "--data-dir" in result.stdout
+
+
 def test_cli_shows_all_subcommands():
     """Main help should list all worker subcommands."""
     result = subprocess.run(
@@ -65,3 +78,4 @@ def test_cli_shows_all_subcommands():
     assert "curate" in result.stdout
     assert "janitor" in result.stdout
     assert "distill" in result.stdout
+    assert "survey" in result.stdout

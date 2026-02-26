@@ -5,6 +5,8 @@ import json
 import os
 import time
 
+import pytest
+
 from living_graph.surveyor import SurveyorPipeline
 
 

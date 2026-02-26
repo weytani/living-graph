@@ -32,6 +32,7 @@ PERMISSIONS = {
         "create": False,
         "edit": False,
         "edit_tags": True,
+        "edit_relationships": True,
         "delete": False,
     },
 }

@@ -12,16 +12,19 @@ class TestOrchestratorRunRecord:
     def test_creates_run_record(self, roam, claude):
         """Orchestrator creates a Run/Orchestrator page with worker results."""
         orch = Orchestrator(roam, claude, run_prefix="Test/Run/")
-        # Run with a page unlikely to have content — minimizes API calls
-        result = orch.run(target_date="2020-01-01")
+        # Use only date-driven workers on an empty page to avoid hammering the API.
+        # Janitor and Surveyor scan the full graph — too heavy for a unit test.
+        result = orch.run(
+            target_date="2020-01-01",
+            workers=["Curator", "Distiller"],
+        )
 
         assert result["run_title"].startswith("Test/Run/Orchestrator")
         assert "workers" in result
-        assert len(result["workers"]) == 4
+        assert result["status"] == "completed"
+        assert len(result["workers"]) == 2
         assert result["workers"][0]["name"] == "Curator"
         assert result["workers"][1]["name"] == "Distiller"
-        assert result["workers"][2]["name"] == "Janitor"
-        assert result["workers"][3]["name"] == "Surveyor"
 
         # Verify Run/ page exists in Roam with completed status
         time.sleep(2)

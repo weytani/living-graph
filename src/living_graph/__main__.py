@@ -177,6 +177,39 @@ def cmd_survey(args):
     print("Done.")
 
 
+def cmd_run(args):
+    """Run all workers sequentially (nightly orchestrator)."""
+    load_dotenv()
+    import anthropic
+    from living_graph.client import RoamClient
+    from living_graph.orchestrator import Orchestrator
+
+    roam = RoamClient(
+        graph=os.environ["ROAM_GRAPH"],
+        token=os.environ["ROAM_API_TOKEN"],
+    )
+    claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    target = None
+    if args.date:
+        target = args.date
+
+    orch = Orchestrator(roam, claude, data_dir=args.data_dir or "data")
+    print("Starting nightly run...")
+
+    result = orch.run(target_date=target, catch_up=args.catch_up)
+
+    for w in result["workers"]:
+        status_icon = "OK" if w["status"] == "completed" else "FAIL"
+        print(f"  [{status_icon}] {w['name']}")
+
+    print(f"\nRun record: {result['run_title']}")
+    if result["status"] == "failed":
+        print(f"ABORTED: {result['failed_worker']} failed")
+        sys.exit(1)
+    print("All workers completed.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="living_graph",
@@ -241,6 +274,20 @@ def main():
         help="Directory for vector DB and state files (default: data/)",
     )
     survey_parser.set_defaults(func=cmd_survey)
+
+    run_parser = subparsers.add_parser("run", help="Run all workers (nightly orchestrator)")
+    run_parser.add_argument(
+        "--date", type=str, help="Target date (YYYY-MM-DD format, default: today)"
+    )
+    run_parser.add_argument(
+        "--catch-up", type=int, default=0,
+        help="Also process previous N days for date-driven workers",
+    )
+    run_parser.add_argument(
+        "--data-dir", type=str, default=None,
+        help="Directory for surveyor vector DB (default: data/)",
+    )
+    run_parser.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
     if not args.command:

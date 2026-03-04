@@ -79,3 +79,18 @@ def test_cli_shows_all_subcommands():
     assert "janitor" in result.stdout
     assert "distill" in result.stdout
     assert "survey" in result.stdout
+    assert "run" in result.stdout
+
+
+def test_cli_run_help():
+    """Run subcommand should show help."""
+    result = subprocess.run(
+        [sys.executable, "-m", "living_graph", "run", "--help"],
+        capture_output=True,
+        text=True,
+        cwd="/Users/djr/code/living-graph",
+    )
+    assert result.returncode == 0
+    assert "--date" in result.stdout
+    assert "--catch-up" in result.stdout
+    assert "--data-dir" in result.stdout

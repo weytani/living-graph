@@ -39,12 +39,12 @@ echo "  Found: $($PYTHON --version)"
 # --- Step 2: Virtual environment ---
 echo "[2/6] Setting up virtual environment..."
 if [ ! -d "$VENV_DIR" ]; then
-    $PYTHON -m venv "$VENV_DIR"
+    uv venv "$VENV_DIR" --python "$PYTHON"
     echo "  Created: $VENV_DIR"
 else
     echo "  Exists: $VENV_DIR"
 fi
-"$VENV_DIR/bin/pip" install --quiet -e ".[dev,surveyor]"
+uv sync --frozen --extra dev --extra surveyor
 echo "  Dependencies installed."
 
 # --- Step 3: Environment variables ---
